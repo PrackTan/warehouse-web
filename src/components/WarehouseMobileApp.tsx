@@ -152,14 +152,14 @@ export const WarehouseMobileApp: React.FC<WarehouseMobileAppProps> = ({
   }
 
   return (
-    <div className="min-h-[100dvh] flex flex-col bg-[#f9fafb] text-zinc-900 pb-16">
+    <div className="min-h-[100dvh] flex flex-col bg-[#f9fafb] text-zinc-900 pb-12">
       <WarehouseHeader
         showBackHome={Boolean(initialBinCode)}
         isRefreshing={isRefreshing}
         onRefresh={handleRefresh}
       />
 
-      <main className="w-full max-w-4xl mx-auto px-4 pt-4 flex-1">
+      <main className="w-full max-w-xl mx-auto px-3.5 pt-3 flex-1">
         {/* Trường hợp 1: Chưa kết nối được Google Drive / thiếu biến Vercel */}
         {errorMsg && !snapshot && (
           <ConnectionErrorCard
@@ -171,16 +171,16 @@ export const WarehouseMobileApp: React.FC<WarehouseMobileAppProps> = ({
 
         {/* Trường hợp 2: Quét mã thùng không tồn tại */}
         {snapshot && initialBinCode && !activeBin && (
-          <section className="rounded-2xl border border-amber-200 bg-white p-6 text-center space-y-3 shadow-[0_10px_28px_-14px_rgba(15,23,42,0.06)]">
+          <section className="rounded-lg border border-zinc-300 bg-white p-6 text-center space-y-3">
             <div className="text-sm font-bold text-zinc-900">
               Không tìm thấy thùng mã &ldquo;{decodeURIComponent(initialBinCode)}&rdquo;
             </div>
-            <p className="text-xs text-slate-500">
+            <p className="text-xs text-zinc-500">
               Thùng này có thể vừa được đổi mã hoặc chưa đồng bộ từ WikiHIS Desktop.
             </p>
             <Link
               href="/"
-              className="inline-flex items-center px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold"
+              className="inline-flex items-center px-4 py-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-bold"
             >
               Xem danh sách tất cả thùng
             </Link>
@@ -213,17 +213,19 @@ export const WarehouseMobileApp: React.FC<WarehouseMobileAppProps> = ({
         />
       )}
 
-      {/* Toast thông báo phản hồi nhanh */}
+      {/* Toast thông báo phản hồi nhanh phong cách Bill trắng đen */}
       {toast && (
         <div
-          className={`fixed bottom-5 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-full text-xs font-bold shadow-lg max-w-[92vw] inline-flex items-center gap-2 ${
-            toast.isError ? 'bg-rose-600 text-white' : 'bg-zinc-900 text-white'
+          className={`fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-3.5 py-2 rounded-lg text-xs font-bold shadow-lg max-w-[92vw] inline-flex items-center gap-2 border ${
+            toast.isError
+              ? 'bg-white border-zinc-900 text-zinc-900'
+              : 'bg-zinc-900 border-zinc-900 text-white'
           }`}
         >
           {toast.isError ? (
-            <WarningCircle className="w-4 h-4 text-rose-200 shrink-0" weight="fill" />
+            <WarningCircle className="w-4 h-4 text-zinc-900 shrink-0" weight="fill" />
           ) : (
-            <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" weight="fill" />
+            <CheckCircle className="w-4 h-4 text-white shrink-0" weight="fill" />
           )}
           <span className="truncate">{toast.text}</span>
         </div>

@@ -11,7 +11,7 @@ export function createClientUuid(): string {
 }
 
 /**
- * Ẩn ghi chú seed mặc định từ bảng thống kê kho để danh sách vật tư sạch sẽ, không rối chữ
+ * Ẩn ghi chú seed mặc định từ bảng thống kê kho để giữ từng dòng Bill ngắn gọn nhất
  */
 export function isDefaultSeedNote(note?: string): boolean {
   if (!note) return true
@@ -23,36 +23,32 @@ export function isDefaultSeedNote(note?: string): boolean {
 }
 
 /**
- * Trả về nhãn và bảng màu chuẩn Y tế cho trạng thái 5S trên nền sáng
+ * Nhãn trạng thái 5S theo phong cách Bill trắng đen tương phản cao
  */
 export function getStatusMeta(status: Warehouse5SStatus): {
   label: string
   pillClass: string
-  dotClass: string
 } {
   if (status === 'repair') {
     return {
-      label: 'Chờ sửa',
-      pillClass: 'bg-amber-50 text-amber-800 border-amber-200/90',
-      dotClass: 'bg-amber-500'
+      label: 'CHỜ SỬA',
+      pillClass: 'border border-dashed border-zinc-700 bg-zinc-100 text-zinc-900'
     }
   }
   if (status === 'scrap') {
     return {
-      label: 'Hỏng / Thanh lý',
-      pillClass: 'bg-rose-50 text-rose-800 border-rose-200/90',
-      dotClass: 'bg-rose-500'
+      label: 'HỎNG / THANH LÝ',
+      pillClass: 'border border-zinc-900 bg-zinc-200 text-zinc-900'
     }
   }
   return {
-    label: 'Dùng tốt',
-    pillClass: 'bg-emerald-50 text-emerald-800 border-emerald-200/90',
-    dotClass: 'bg-emerald-500'
+    label: 'DÙNG TỐT',
+    pillClass: 'border border-zinc-300 bg-white text-zinc-800'
   }
 }
 
 /**
- * Chuẩn hóa tên phòng kho dễ đọc trên điện thoại
+ * Chuẩn hóa tên phòng kho gọn nhẹ
  */
 export function getRoomLabel(roomCode: string): string {
   return roomCode === 'working_room' ? 'Phòng Làm Việc IT' : 'Phòng Kho IT'

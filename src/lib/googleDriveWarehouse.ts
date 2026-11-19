@@ -30,23 +30,43 @@ let cachedDbFolderId: string | null = null
 let cachedLiveFileId: string | null = null
 
 /**
+ * Làm sạch chuỗi khóa môi trường (loại bỏ tiền tố tên biến hoặc dấu ngoặc kép/đơn nếu người dùng copy thừa)
+ */
+function sanitizeEnvRaw(rawValue: string): string {
+  let clean = rawValue.trim()
+  if (clean.startsWith('WIKIHIS_DRIVE_KEY=')) {
+    clean = clean.slice('WIKIHIS_DRIVE_KEY='.length).trim()
+  }
+  if (
+    (clean.startsWith('"') && clean.endsWith('"')) ||
+    (clean.startsWith("'") && clean.endsWith("'"))
+  ) {
+    clean = clean.slice(1, -1).trim()
+  }
+  return clean.replace(/\s+/g, '')
+}
+
+/**
  * Giải mã biến môi trường WIKIHIS_DRIVE_KEY (Base64 JSON) được copy từ WikiHIS Desktop
  */
-function parseDriveKey(): DecodedDriveKey | null {
+function parseDriveKey(): { key: DecodedDriveKey | null; status: 'ok' | 'missing' | 'invalid' } {
   const raw = process.env.WIKIHIS_DRIVE_KEY?.trim()
-  if (!raw) return null
+  if (!raw) return { key: null, status: 'missing' }
+
+  const sanitized = sanitizeEnvRaw(raw)
+  if (!sanitized) return { key: null, status: 'missing' }
 
   try {
-    const jsonText = raw.startsWith('{')
-      ? raw
-      : Buffer.from(raw, 'base64').toString('utf-8')
+    const jsonText = raw.trim().startsWith('{')
+      ? raw.trim()
+      : Buffer.from(sanitized, 'base64').toString('utf-8')
     const parsed = JSON.parse(jsonText) as Partial<DecodedDriveKey>
     if (!parsed.client_id || !parsed.client_secret || !parsed.refresh_token) {
-      return null
+      return { key: null, status: 'invalid' }
     }
-    return parsed as DecodedDriveKey
+    return { key: parsed as DecodedDriveKey, status: 'ok' }
   } catch {
-    return null
+    return { key: null, status: 'invalid' }
   }
 }
 
@@ -252,14 +272,18 @@ export function buildWebSnapshot(raw: WarehouseLiveCloudPayload): WebWarehouseSn
  * Đọc Snapshot Kho IT mới nhất từ Google Drive cho Server Components & API
  */
 export async function loadWarehouseLiveSnapshot(): Promise<LoadWarehouseResult> {
-  const key = parseDriveKey()
-  if (!key) {
+  const parsed = parseDriveKey()
+  if (!parsed.key) {
     return {
       ok: false,
       missingEnv: true,
-      error: 'Chưa cấu hình biến môi trường WIKIHIS_DRIVE_KEY trên Vercel.'
+      error:
+        parsed.status === 'invalid'
+          ? 'Giá trị biến WIKIHIS_DRIVE_KEY trên Vercel không đúng định dạng (có thể bị thiếu ký tự hoặc dính khoảng trắng). Hãy copy lại từ WikiHIS Desktop.'
+          : 'Chưa cấu hình biến môi trường WIKIHIS_DRIVE_KEY trên Vercel (hoặc đã thêm nhưng chưa bấm Redeploy).'
     }
   }
+  const key = parsed.key
 
   try {
     const fileRes = await readRawLivePayload(key)
@@ -303,14 +327,18 @@ export async function adjustWarehouseStockOnDrive(input: {
   error?: string
   snapshot?: WebWarehouseSnapshot
 }> {
-  const key = parseDriveKey()
-  if (!key) {
+  const parsed = parseDriveKey()
+  if (!parsed.key) {
     return {
       ok: false,
       statusCode: 500,
-      error: 'Thiếu biến môi trường WIKIHIS_DRIVE_KEY trên server.'
+      error:
+        parsed.status === 'invalid'
+          ? 'Biến môi trường WIKIHIS_DRIVE_KEY trên server không hợp lệ.'
+          : 'Thiếu biến môi trường WIKIHIS_DRIVE_KEY trên server.'
     }
   }
+  const key = parsed.key
 
   const fileRes = await readRawLivePayload(key)
   if (!fileRes) {

@@ -8,6 +8,7 @@ interface WarehouseHeaderProps {
   showBackHome: boolean
   isRefreshing: boolean
   onRefresh: () => void
+  onNavigateHome?: () => void
 }
 
 /**
@@ -16,12 +17,21 @@ interface WarehouseHeaderProps {
 export const WarehouseHeader: React.FC<WarehouseHeaderProps> = ({
   showBackHome,
   isRefreshing,
-  onRefresh
+  onRefresh,
+  onNavigateHome
 }) => {
+  // Chặn điều hướng trực tiếp khi đang có bản nháp chưa lưu để hỏi xác nhận an toàn
+  const handleHomeClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
+    if (onNavigateHome) {
+      e.preventDefault()
+      onNavigateHome()
+    }
+  }
+
   return (
     <header className="sticky top-0 z-30 bg-white/95 border-b border-zinc-300">
       <div className="w-full max-w-xl mx-auto px-3.5 h-12 flex items-center justify-between gap-2">
-        <Link href="/" className="flex items-center gap-2 min-w-0">
+        <Link href="/" onClick={handleHomeClick} className="flex items-center gap-2 min-w-0">
           <span className="w-7 h-7 rounded-md border border-zinc-900 bg-zinc-900 text-white flex items-center justify-center shrink-0">
             <Package className="w-4 h-4" weight="bold" />
           </span>
@@ -39,6 +49,7 @@ export const WarehouseHeader: React.FC<WarehouseHeaderProps> = ({
           {showBackHome && (
             <Link
               href="/"
+              onClick={handleHomeClick}
               className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-zinc-300 bg-white hover:bg-zinc-100 text-[11px] font-semibold text-zinc-800 active:scale-[0.98] transition-all"
             >
               <ArrowLeft className="w-3 h-3" weight="bold" />

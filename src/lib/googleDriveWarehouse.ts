@@ -1,4 +1,5 @@
 import type {
+  BatchAdjustChangeItem,
   EnrichedBin,
   EnrichedItem,
   EnrichedTransaction,
@@ -309,13 +310,12 @@ export async function loadWarehouseLiveSnapshot(): Promise<LoadWarehouseResult> 
 }
 
 /**
- * Thực thi giao dịch Xuất / Nhập / Kiểm kê và ghi trực tiếp vào db/warehouse_live.json
- * (Không yêu cầu PIN; bảo vệ chống bấm đúp khi lag mạng bằng Idempotency-Key)
+ * Thực thi giao dịch Xuất / Nhập / Kiểm kê HÀNG LOẠT (nguyên tử All-or-Nothing) và ghi 1 lần duy nhất vào db/warehouse_live.json
+ * - Đọc file 1 lần, kiểm tra toàn bộ thay đổi trên bản sao trước khi ghi để không bao giờ bị lưu dở dang
+ * - Bảo vệ chống bấm đúp / mạng 4G chập chờn bằng 1 khóa `Idempotency-Key` cho cả lô thay đổi
  */
-export async function adjustWarehouseStockOnDrive(input: {
-  itemId: string
-  txType: WarehouseTxType
-  amount: number
+export async function adjustWarehouseBatchOnDrive(input: {
+  changes: BatchAdjustChangeItem[]
   targetDepartment?: string
   performedBy?: string
   note?: string
@@ -323,6 +323,7 @@ export async function adjustWarehouseStockOnDrive(input: {
 }): Promise<{
   ok: boolean
   idempotent?: boolean
+  appliedCount?: number
   statusCode: number
   error?: string
   snapshot?: WebWarehouseSnapshot
@@ -340,6 +341,14 @@ export async function adjustWarehouseStockOnDrive(input: {
   }
   const key = parsed.key
 
+  if (!Array.isArray(input.changes) || input.changes.length === 0) {
+    return {
+      ok: false,
+      statusCode: 400,
+      error: 'Không có sản phẩm nào cần cập nhật số lượng.'
+    }
+  }
+
   const fileRes = await readRawLivePayload(key)
   if (!fileRes) {
     return {
@@ -352,95 +361,141 @@ export async function adjustWarehouseStockOnDrive(input: {
   const { fileId, payload } = fileRes
   const cleanKey = (input.idempotencyKey || '').trim()
 
-  // Kiểm tra Idempotency-Key tránh cộng/trừ kho 2 lần khi mạng 4G chập chờn
+  // Kiểm tra Idempotency-Key tránh cộng/trừ kho 2 lần khi mạng 4G chập chờn hoặc bấm gửi đúp
   if (cleanKey && Array.isArray(payload.applied_keys)) {
     const existed = payload.applied_keys.find((k) => k.key === cleanKey)
     if (existed) {
       return {
         ok: true,
         idempotent: true,
+        appliedCount: 0,
         statusCode: 200,
         snapshot: buildWebSnapshot(payload)
       }
     }
   }
 
-  const amount = Math.floor(Number(input.amount) || 0)
-  if ((input.txType === 'export' || input.txType === 'import') && amount <= 0) {
-    return { ok: false, statusCode: 400, error: 'Số lượng Xuất / Nhập phải lớn hơn 0.' }
-  }
-  if (input.txType === 'adjust' && amount < 0) {
-    return { ok: false, statusCode: 400, error: 'Số lượng kiểm kê không thể âm.' }
-  }
+  // Tạo bản sao danh sách sản phẩm để kiểm tra & tính toán toàn bộ lô trước khi ghi thật (All-or-Nothing)
+  const workingItems = [...(payload.warehouse_items || [])]
+  const newTransactions: RawTransactionRecord[] = []
+  const nowIso = new Date().toISOString()
+  const baseTs = Date.now()
+  const cleanDepartment = (input.targetDepartment || 'Quét QR Điện thoại').trim()
+  const cleanPerformedBy = (input.performedBy || 'NV IT (Vercel QR)').trim()
+  const batchNote = (input.note || '').trim()
 
-  const items = payload.warehouse_items || []
-  const itemIdx = items.findIndex((it) => it.id === input.itemId && !it.deleted_at)
-  if (itemIdx === -1) {
-    return { ok: false, statusCode: 404, error: 'Không tìm thấy sản phẩm trong thùng.' }
-  }
+  let lastAppliedSummary: { itemId: string; txType: WarehouseTxType; nextQty: number } | null = null
 
-  const targetItem = items[itemIdx]
-  const currentQty = Number(targetItem.quantity) || 0
-  let nextQty = currentQty
-  let qtyChange = 0
+  for (let idx = 0; idx < input.changes.length; idx++) {
+    const change = input.changes[idx]
+    const amount = Math.floor(Number(change.amount) || 0)
 
-  if (input.txType === 'export') {
-    if (amount > currentQty) {
+    if ((change.txType === 'export' || change.txType === 'import') && amount <= 0) {
+      return { ok: false, statusCode: 400, error: 'Số lượng Xuất / Nhập phải lớn hơn 0.' }
+    }
+    if (change.txType === 'adjust' && amount < 0) {
+      return { ok: false, statusCode: 400, error: 'Số lượng kiểm kê không thể âm.' }
+    }
+
+    const itemIdx = workingItems.findIndex((it) => it.id === change.itemId && !it.deleted_at)
+    if (itemIdx === -1) {
       return {
         ok: false,
-        statusCode: 400,
-        error: `Không đủ tồn kho: hiện chỉ còn ${currentQty} ${targetItem.unit || 'Cái'}.`
+        statusCode: 404,
+        error: 'Có sản phẩm không còn tồn tại trong thùng (vui lòng bấm Làm mới để đồng bộ lại).'
       }
     }
-    nextQty = currentQty - amount
-    qtyChange = -amount
-  } else if (input.txType === 'import') {
-    nextQty = currentQty + amount
-    qtyChange = amount
-  } else {
-    nextQty = amount
-    qtyChange = amount - currentQty
-  }
 
-  const nowIso = new Date().toISOString()
-  items[itemIdx] = {
-    ...targetItem,
-    quantity: nextQty,
-    updated_at: nowIso
-  }
+    const targetItem = workingItems[itemIdx]
+    const currentQty = Number(targetItem.quantity) || 0
+    let nextQty = currentQty
+    let qtyChange = 0
 
-  const txRecord: RawTransactionRecord = {
-    id: `wh_tx_web_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-    item_id: targetItem.id,
-    bin_id: targetItem.bin_id,
-    tx_type: input.txType,
-    quantity_change: qtyChange,
-    quantity_after: nextQty,
-    target_department: (input.targetDepartment || 'Quét QR Điện thoại').trim(),
-    performed_by: (input.performedBy || 'NV IT (Vercel QR)').trim(),
-    note:
-      (input.note || '').trim() ||
-      (input.txType === 'export'
+    if (change.txType === 'export') {
+      if (amount > currentQty) {
+        return {
+          ok: false,
+          statusCode: 400,
+          error: `Không đủ tồn kho cho "${targetItem.name}": hiện chỉ còn ${currentQty} ${targetItem.unit || 'Cái'}.`
+        }
+      }
+      nextQty = currentQty - amount
+      qtyChange = -amount
+    } else if (change.txType === 'import') {
+      nextQty = currentQty + amount
+      qtyChange = amount
+    } else {
+      nextQty = amount
+      qtyChange = amount - currentQty
+      // Nếu số lượng kiểm kê trùng khớp tồn hiện tại thì bỏ qua để không tạo dòng lịch sử 0
+      if (qtyChange === 0) continue
+    }
+
+    workingItems[itemIdx] = {
+      ...targetItem,
+      quantity: nextQty,
+      updated_at: nowIso
+    }
+
+    const itemNote = (change.note || batchNote).trim()
+    const defaultNote =
+      change.txType === 'export'
         ? `Xuất qua QR Mobile: ${targetItem.name}`
-        : input.txType === 'import'
+        : change.txType === 'import'
           ? `Nhập qua QR Mobile: ${targetItem.name}`
-          : `Kiểm kê QR Mobile: ${targetItem.name}`),
-    created_at: nowIso,
-    updated_at: nowIso,
-    deleted_at: null
+          : `Kiểm kê QR Mobile: ${targetItem.name}`
+
+    newTransactions.push({
+      id: `wh_tx_web_${baseTs}_${idx}_${Math.random().toString(36).slice(2, 6)}`,
+      item_id: targetItem.id,
+      bin_id: targetItem.bin_id,
+      tx_type: change.txType,
+      quantity_change: qtyChange,
+      quantity_after: nextQty,
+      target_department: cleanDepartment,
+      performed_by: cleanPerformedBy,
+      note: itemNote || defaultNote,
+      created_at: nowIso,
+      updated_at: nowIso,
+      deleted_at: null
+    })
+
+    lastAppliedSummary = {
+      itemId: targetItem.id,
+      txType: change.txType,
+      nextQty
+    }
   }
 
-  payload.warehouse_items = items
-  payload.warehouse_transactions = [txRecord, ...(payload.warehouse_transactions || [])].slice(0, 500)
+  // Nếu toàn bộ thay đổi đều không làm đổi số lượng thực tế thì trả snapshot ngay, không tốn 1 lượt ghi Drive
+  if (newTransactions.length === 0) {
+    return {
+      ok: true,
+      appliedCount: 0,
+      statusCode: 200,
+      snapshot: buildWebSnapshot(payload)
+    }
+  }
+
+  // Đảo thứ tự nhẹ để mục đầu tiên trong lô hiện ở đầu lịch sử gần nhất
+  payload.warehouse_items = workingItems
+  payload.warehouse_transactions = [
+    ...newTransactions,
+    ...(payload.warehouse_transactions || [])
+  ].slice(0, 500)
   payload.last_updated = nowIso
 
-  if (cleanKey) {
+  if (cleanKey && lastAppliedSummary) {
     const keys = Array.isArray(payload.applied_keys) ? payload.applied_keys : []
     keys.push({
       key: cleanKey,
-      item_id: targetItem.id,
-      tx_type: input.txType,
-      quantity_after: nextQty,
+      item_id:
+        newTransactions.length === 1
+          ? lastAppliedSummary.itemId
+          : `batch:${newTransactions.length}`,
+      tx_type: newTransactions.length === 1 ? lastAppliedSummary.txType : 'batch',
+      quantity_after:
+        newTransactions.length === 1 ? lastAppliedSummary.nextQty : newTransactions.length,
       created_at: nowIso
     })
     payload.applied_keys = keys.slice(-200)
@@ -469,8 +524,43 @@ export async function adjustWarehouseStockOnDrive(input: {
 
   return {
     ok: true,
+    appliedCount: newTransactions.length,
     statusCode: 200,
     snapshot: buildWebSnapshot(payload)
   }
+}
+
+/**
+ * Thực thi giao dịch Xuất / Nhập / Kiểm kê đơn lẻ (giữ tương thích ngược, ủy quyền sang luồng Batch nguyên tử)
+ */
+export async function adjustWarehouseStockOnDrive(input: {
+  itemId: string
+  txType: WarehouseTxType
+  amount: number
+  targetDepartment?: string
+  performedBy?: string
+  note?: string
+  idempotencyKey?: string
+}): Promise<{
+  ok: boolean
+  idempotent?: boolean
+  statusCode: number
+  error?: string
+  snapshot?: WebWarehouseSnapshot
+}> {
+  return adjustWarehouseBatchOnDrive({
+    changes: [
+      {
+        itemId: input.itemId,
+        txType: input.txType,
+        amount: input.amount,
+        note: input.note
+      }
+    ],
+    targetDepartment: input.targetDepartment,
+    performedBy: input.performedBy,
+    note: input.note,
+    idempotencyKey: input.idempotencyKey
+  })
 }
 

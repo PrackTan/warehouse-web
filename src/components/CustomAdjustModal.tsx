@@ -6,33 +6,40 @@ import type { EnrichedItem, WarehouseTxType } from '@/lib/types'
 
 interface CustomAdjustModalProps {
   item: EnrichedItem
-  isSubmitting: boolean
+  currentDraftQty: number
   onClose: () => void
-  onSubmit: (
-    item: EnrichedItem,
-    txType: WarehouseTxType,
-    amount: number,
-    department: string
-  ) => Promise<boolean>
+  onApplyDraft: (item: EnrichedItem, nextQty: number, mode: 'delta' | 'adjust') => void
 }
 
 const QUICK_PRESETS = [1, 2, 5, 10]
 
 /**
- * CustomAdjustModal: Hộp thoại nhập số lượng Xuất / Nhập / Kiểm kê phong cách Bill trắng đen
+ * CustomAdjustModal: Hộp thoại nhập số lượng nhanh vào BẢN NHÁP (chưa gửi API ngay)
+ * - Cho phép chọn Xuất đi / Nhập thêm / Kiểm kê rồi áp dụng vào danh sách nháp của thùng
+ * - Người dùng có thể chỉnh tiếp nhiều món khác rồi bấm Lưu -> Xác nhận lần 2 để gửi 1 lần
  */
 export const CustomAdjustModal: React.FC<CustomAdjustModalProps> = ({
   item,
-  isSubmitting,
+  currentDraftQty,
   onClose,
-  onSubmit
+  onApplyDraft
 }) => {
+  const originalQty = Number(item.quantity) || 0
   const [txType, setTxType] = useState<WarehouseTxType>('export')
   const [amount, setAmount] = useState<string>('1')
-  const [department, setDepartment] = useState<string>('')
   const [formError, setFormError] = useState<string | null>(null)
 
-  const handleConfirm = async (e: React.FormEvent): Promise<void> => {
+  // Tính trước số lượng dự kiến sau khi áp dụng để người dùng kiểm tra ngay
+  const parsedAmount = parseInt(amount, 10)
+  const previewQty = Number.isNaN(parsedAmount)
+    ? currentDraftQty
+    : txType === 'export'
+      ? Math.max(0, currentDraftQty - Math.max(0, parsedAmount))
+      : txType === 'import'
+        ? currentDraftQty + Math.max(0, parsedAmount)
+        : Math.max(0, parsedAmount)
+
+  const handleConfirm = (e: React.FormEvent): void => {
     e.preventDefault()
     setFormError(null)
     const num = parseInt(amount, 10)
@@ -44,12 +51,24 @@ export const CustomAdjustModal: React.FC<CustomAdjustModalProps> = ({
       setFormError('Số lượng Xuất / Nhập phải lớn hơn 0.')
       return
     }
+    if (txType === 'export' && num > currentDraftQty) {
+      setFormError(`Không thể xuất quá số lượng hiện có (${currentDraftQty} ${item.unit || 'Cái'}).`)
+      return
+    }
     if (txType === 'adjust' && num < 0) {
       setFormError('Số lượng kiểm kê không thể nhỏ hơn 0.')
       return
     }
-    const ok = await onSubmit(item, txType, num, department)
-    if (ok) onClose()
+
+    const nextQty =
+      txType === 'export'
+        ? currentDraftQty - num
+        : txType === 'import'
+          ? currentDraftQty + num
+          : num
+
+    onApplyDraft(item, nextQty, txType === 'adjust' ? 'adjust' : 'delta')
+    onClose()
   }
 
   return (
@@ -66,7 +85,13 @@ export const CustomAdjustModal: React.FC<CustomAdjustModalProps> = ({
           <div className="min-w-0">
             <h3 className="text-sm font-bold text-zinc-900 truncate">{item.name}</h3>
             <p className="text-xs text-zinc-500 mt-0.5 font-mono tabular-nums">
-              Tồn hiện tại: <strong className="text-zinc-900">{item.quantity}</strong>{' '}
+              Tồn gốc: <strong className="text-zinc-900">{originalQty}</strong>
+              {currentDraftQty !== originalQty && (
+                <>
+                  {' '}
+                  • Đang sửa: <strong className="text-zinc-900">{currentDraftQty}</strong>
+                </>
+              )}{' '}
               {item.unit || 'Cái'}
             </p>
           </div>
@@ -85,7 +110,7 @@ export const CustomAdjustModal: React.FC<CustomAdjustModalProps> = ({
             [
               { id: 'export', label: 'Xuất đi', defaultAmt: '1' },
               { id: 'import', label: 'Nhập thêm', defaultAmt: '1' },
-              { id: 'adjust', label: 'Kiểm kê', defaultAmt: String(item.quantity) }
+              { id: 'adjust', label: 'Kiểm kê', defaultAmt: String(currentDraftQty) }
             ] as const
           ).map((mode) => (
             <button
@@ -147,20 +172,16 @@ export const CustomAdjustModal: React.FC<CustomAdjustModalProps> = ({
             }}
             className="w-full h-10 rounded-lg border border-zinc-400 bg-white px-3 text-base font-mono font-bold tabular-nums text-zinc-900 outline-none focus:border-zinc-900"
           />
-          {formError && <p className="text-xs font-semibold text-zinc-900">{formError}</p>}
-        </div>
 
-        <div className="space-y-1">
-          <label className="block text-xs font-semibold text-zinc-700">
-            Khoa / Phòng nhận (tùy chọn):
-          </label>
-          <input
-            type="text"
-            value={department}
-            onChange={(e) => setDepartment(e.target.value)}
-            placeholder="VD: Khoa Nội 1, Quầy Thu Ngân..."
-            className="w-full h-9 rounded-lg border border-zinc-300 bg-white px-3 text-sm text-zinc-900 placeholder:text-zinc-400 outline-none focus:border-zinc-900"
-          />
+          {/* Xem trước kết quả tạm tính */}
+          <div className="flex items-center justify-between text-[11px] font-mono tabular-nums text-zinc-500 pt-0.5">
+            <span>Dự kiến sau khi áp dụng (chưa gửi lưu):</span>
+            <strong className="text-zinc-900">
+              {currentDraftQty} → {previewQty} {item.unit || 'Cái'}
+            </strong>
+          </div>
+
+          {formError && <p className="text-xs font-semibold text-zinc-900">{formError}</p>}
         </div>
 
         <div className="grid grid-cols-2 gap-2 pt-1">
@@ -173,10 +194,9 @@ export const CustomAdjustModal: React.FC<CustomAdjustModalProps> = ({
           </button>
           <button
             type="submit"
-            disabled={isSubmitting}
-            className="h-10 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-xs font-bold text-white active:scale-[0.98] transition-all cursor-pointer disabled:opacity-50"
+            className="h-10 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-xs font-bold text-white active:scale-[0.98] transition-all cursor-pointer"
           >
-            {isSubmitting ? 'Đang lưu...' : 'Xác nhận lưu'}
+            Áp dụng vào nháp
           </button>
         </div>
       </form>

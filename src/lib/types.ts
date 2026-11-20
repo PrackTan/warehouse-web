@@ -101,3 +101,33 @@ export interface LoadWarehouseResult {
   snapshot?: WebWarehouseSnapshot
 }
 
+/**
+ * Một hạng mục thay đổi số lượng trong yêu cầu lưu hàng loạt (Batch Adjust API)
+ */
+export interface BatchAdjustChangeItem {
+  itemId: string
+  txType: WarehouseTxType
+  amount: number
+  note?: string
+}
+
+/**
+ * Trạng thái chỉnh sửa nháp của từng sản phẩm trong thùng trước khi gửi lên Backend
+ */
+export interface DraftItemEdit {
+  quantity: number
+  mode: 'delta' | 'adjust'
+}
+
+/**
+ * Bản ghi đối chiếu thay đổi (Cũ -> Mới) hiển thị trong Hộp thoại xác nhận lần 2
+ */
+export interface PendingQuantityChange {
+  item: EnrichedItem
+  originalQty: number
+  draftQty: number
+  delta: number
+  txType: WarehouseTxType
+  apiAmount: number
+}
+
